@@ -253,6 +253,8 @@ mod integration_tests {
     use serde_json::Value;
     use std::time::Duration;
     use tokio::util::FutureExt;
+    use hyper::client::connect::dns::GaiResolver;
+    use hyper::client::HttpConnector;
 
     #[test]
     fn insert_events() {
@@ -326,14 +328,14 @@ mod integration_tests {
 
     struct ClickhouseClient {
         host: String,
-        client: reqwest::Client,
+        client: hyper::client::Client<HttpConnector<GaiResolver>>,
     }
 
     impl ClickhouseClient {
         fn new(host: String) -> Self {
             ClickhouseClient {
                 host,
-                client: reqwest::Client::new(),
+                client: hyper::client::Client::new(),
             }
         }
 
