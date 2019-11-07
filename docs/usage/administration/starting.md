@@ -53,7 +53,7 @@ generate one containing a custom set of components with the subcommand
 {% tabs %}
 {% tab title="List" %}
 ```bash
-vector generate stdin|json_parser,add_fields|console
+vector generate 'stdin|json_parser,add_fields|console'
 ```
 {% endtab %}
 {% endtabs %}

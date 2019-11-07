@@ -1,10 +1,16 @@
-use crate::topology::config::{SinkDescription, SourceDescription, TransformDescription};
+use crate::topology::config::{
+    GlobalOptions, SinkDescription, SourceDescription, TransformDescription,
+};
+use indexmap::IndexMap;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use structopt::StructOpt;
+use toml::Value;
 
 #[derive(StructOpt, Debug)]
 #[structopt(rename_all = "kebab-case")]
 pub struct Opts {
-    /// Generate expression, e.g. stdin|json_parser,add_fields|console
+    /// Generate expression, e.g. 'stdin|json_parser,add_fields|console'
     ///
     /// Three comma-separated lists of sources, transforms and sinks, separated
     /// by pipes. If subsequent component types are not needed then their pipes
@@ -30,7 +36,150 @@ pub struct Opts {
     expression: String,
 }
 
+#[derive(Serialize)]
+pub struct SinkOuter {
+    // pub buffer: crate::buffers::BufferConfig,
+    pub healthcheck: bool,
+    pub inputs: Vec<String>,
+    #[serde(flatten)]
+    pub inner: Value,
+}
+
+#[derive(Serialize)]
+pub struct TransformOuter {
+    pub inputs: Vec<String>,
+    #[serde(flatten)]
+    pub inner: Value,
+}
+
+#[derive(Serialize, Default)]
+pub struct Config {
+    #[serde(flatten)]
+    pub global: GlobalOptions,
+    pub sources: IndexMap<String, Value>,
+    pub sinks: IndexMap<String, SinkOuter>,
+    pub transforms: IndexMap<String, TransformOuter>,
+}
+
 pub fn cmd(opts: &Opts) -> exitcode::ExitCode {
-    println!("{}", opts.expression);
-    exitcode::OK
+    let components: Vec<Vec<String>> = opts
+        .expression
+        .split('|')
+        .map(|s| {
+            s.to_owned()
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| s.len() > 0)
+                .collect()
+        })
+        .collect();
+
+    let mut config = Config::default();
+    config.global.data_dir = crate::topology::config::default_data_dir();
+
+    let mut i = 0;
+    let mut source_names = Vec::new();
+    components
+        .get(0)
+        .unwrap_or(&Vec::new())
+        .iter()
+        .for_each(|c| {
+            i += 1;
+            let name = format!("source{}", i);
+            source_names.push(name.clone());
+            config.sources.insert(
+                name,
+                SourceDescription::example(c)
+                    .map(|mut val| {
+                        val.as_table_mut().map(|s| {
+                            s.insert("type".to_owned(), c.to_owned().into());
+                            s
+                        });
+                        val
+                    })
+                    .unwrap_or(Value::Table(BTreeMap::new())),
+            );
+        });
+
+    i = 0;
+    let mut transform_names = Vec::new();
+    components
+        .get(1)
+        .unwrap_or(&Vec::new())
+        .iter()
+        .for_each(|c| {
+            i += 1;
+            let name = format!("transform{}", i);
+            transform_names.push(name.clone());
+            let targets = if i == 1 {
+                source_names.clone()
+            } else {
+                vec![transform_names
+                    .get(i - 2)
+                    .unwrap_or(&"TODO".to_owned())
+                    .to_owned()]
+            };
+            config.transforms.insert(
+                name,
+                TransformOuter {
+                    inputs: targets,
+                    inner: TransformDescription::example(c)
+                        .map(|mut val| {
+                            val.as_table_mut().map(|s| {
+                                s.insert("type".to_owned(), c.to_owned().into());
+                                s
+                            });
+                            val
+                        })
+                        .unwrap_or(Value::Table(BTreeMap::new())),
+                },
+            );
+        });
+
+    i = 0;
+    components
+        .get(2)
+        .unwrap_or(&Vec::new())
+        .iter()
+        .for_each(|c| {
+            i += 1;
+            config.sinks.insert(
+                format!("sink{}", i),
+                SinkOuter {
+                    inputs: transform_names
+                        .last()
+                        .map(|s| vec![s.to_owned()])
+                        .or_else(|| {
+                            if source_names.len() > 0 {
+                                Some(source_names.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(vec!["TODO".to_owned()]),
+                    // buffer: crate::buffers::BufferConfig::default(),
+                    healthcheck: true,
+                    inner: SinkDescription::example(c)
+                        .map(|mut val| {
+                            val.as_table_mut().map(|s| {
+                                s.insert("type".to_owned(), c.to_owned().into());
+                                s
+                            });
+                            val
+                        })
+                        .unwrap_or(Value::Table(BTreeMap::new())),
+                },
+            );
+        });
+
+    match toml::to_string_pretty(&config) {
+        Ok(s) => {
+            println!("{}", s);
+            exitcode::OK
+        }
+        Err(e) => {
+            eprintln!("Failed to generate config: {}.", e);
+            exitcode::SOFTWARE
+        }
+    }
 }
