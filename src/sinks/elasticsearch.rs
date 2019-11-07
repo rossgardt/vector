@@ -4,7 +4,6 @@ use crate::{
     region::RegionOrEndpoint,
     sinks::util::{
         http::{https_client, HttpRetryLogic, HttpService},
-        retries::FixedRetryPolicy,
         tls::{TlsOptions, TlsSettings},
         BatchConfig, BatchServiceSink, Buffer, Compression, SinkExt, TowerRequestConfig,
     },
@@ -196,12 +195,6 @@ fn es(
     };
     let doc_type = config.doc_type.clone().unwrap_or("_doc".into());
 
-    let policy = FixedRetryPolicy::new(
-        request.retry_attempts,
-        request.retry_backoff,
-        HttpRetryLogic,
-    );
-
     let headers = config
         .headers
         .as_ref()
@@ -275,7 +268,7 @@ fn es(
     let service = ServiceBuilder::new()
         .concurrency_limit(request.in_flight_limit)
         .rate_limit(request.rate_limit_num, request.rate_limit_duration)
-        .retry(policy)
+        .retry(request.retry_policy(HttpRetryLogic))
         .timeout(request.timeout)
         .service(http_service);
 
