@@ -8,7 +8,7 @@ use crate::{
     },
     topology::config::{DataType, SinkConfig, SinkDescription},
 };
-use futures::{future, stream::iter_ok, Future, Sink};
+use futures::{future, stream::iter_ok, Future};
 use headers::HeaderMapExt;
 use http::{
     header::{self, HeaderName, HeaderValue},
@@ -18,7 +18,6 @@ use hyper::{Body, Request};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use tower::ServiceBuilder;
 
 #[derive(Debug, Snafu)]
 enum BuildError {
@@ -173,12 +172,7 @@ fn http(
                 request
             });
 
-    let service = ServiceBuilder::new()
-        .concurrency_limit(request.in_flight_limit)
-        .rate_limit(request.rate_limit_num, request.rate_limit_duration)
-        .retry(request.retry_policy(HttpRetryLogic))
-        .timeout(request.timeout)
-        .service(http_service);
+    let service = request.service(HttpRetryLogic, http_service);
 
     let encoding = config.encoding.clone();
     let sink = BatchServiceSink::new(service, acker)
