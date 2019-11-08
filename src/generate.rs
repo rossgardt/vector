@@ -1,5 +1,6 @@
 use crate::topology::config::{
-    GlobalOptions, SinkDescription, SourceDescription, TransformDescription,
+    component::ExampleError, GlobalOptions, SinkDescription, SourceDescription,
+    TransformDescription,
 };
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -38,11 +39,11 @@ pub struct Opts {
 
 #[derive(Serialize)]
 pub struct SinkOuter {
-    // pub buffer: crate::buffers::BufferConfig,
     pub healthcheck: bool,
     pub inputs: Vec<String>,
     #[serde(flatten)]
     pub inner: Value,
+    pub buffer: crate::buffers::BufferConfig,
 }
 
 #[derive(Serialize)]
@@ -57,8 +58,8 @@ pub struct Config {
     #[serde(flatten)]
     pub global: GlobalOptions,
     pub sources: IndexMap<String, Value>,
-    pub sinks: IndexMap<String, SinkOuter>,
     pub transforms: IndexMap<String, TransformOuter>,
+    pub sinks: IndexMap<String, SinkOuter>,
 }
 
 pub fn cmd(opts: &Opts) -> exitcode::ExitCode {
@@ -77,6 +78,8 @@ pub fn cmd(opts: &Opts) -> exitcode::ExitCode {
     let mut config = Config::default();
     config.global.data_dir = crate::topology::config::default_data_dir();
 
+    let mut errs = Vec::new();
+
     let mut i = 0;
     let mut source_names = Vec::new();
     components
@@ -87,18 +90,22 @@ pub fn cmd(opts: &Opts) -> exitcode::ExitCode {
             i += 1;
             let name = format!("source{}", i);
             source_names.push(name.clone());
-            config.sources.insert(
-                name,
-                SourceDescription::example(c)
-                    .map(|mut val| {
-                        val.as_table_mut().map(|s| {
-                            s.insert("type".to_owned(), c.to_owned().into());
-                            s
-                        });
-                        val
+            config.sources.insert(name, {
+                let mut d = SourceDescription::example(c)
+                    .map_err(|e| {
+                        match e {
+                            ExampleError::MissingExample => {}
+                            _ => errs.push(e.clone()),
+                        }
+                        e
                     })
-                    .unwrap_or(Value::Table(BTreeMap::new())),
-            );
+                    .unwrap_or(Value::Table(BTreeMap::new()));
+                d.as_table_mut().map(|s| {
+                    s.insert("type".to_owned(), c.to_owned().into());
+                    s
+                });
+                d
+            });
         });
 
     i = 0;
@@ -123,15 +130,22 @@ pub fn cmd(opts: &Opts) -> exitcode::ExitCode {
                 name,
                 TransformOuter {
                     inputs: targets,
-                    inner: TransformDescription::example(c)
-                        .map(|mut val| {
-                            val.as_table_mut().map(|s| {
-                                s.insert("type".to_owned(), c.to_owned().into());
-                                s
-                            });
-                            val
-                        })
-                        .unwrap_or(Value::Table(BTreeMap::new())),
+                    inner: {
+                        let mut d = TransformDescription::example(c)
+                            .map_err(|e| {
+                                match e {
+                                    ExampleError::MissingExample => {}
+                                    _ => errs.push(e.clone()),
+                                }
+                                e
+                            })
+                            .unwrap_or(Value::Table(BTreeMap::new()));
+                        d.as_table_mut().map(|s| {
+                            s.insert("type".to_owned(), c.to_owned().into());
+                            s
+                        });
+                        d
+                    },
                 },
             );
         });
@@ -157,20 +171,32 @@ pub fn cmd(opts: &Opts) -> exitcode::ExitCode {
                             }
                         })
                         .unwrap_or(vec!["TODO".to_owned()]),
-                    // buffer: crate::buffers::BufferConfig::default(),
+                    buffer: crate::buffers::BufferConfig::default(),
                     healthcheck: true,
-                    inner: SinkDescription::example(c)
-                        .map(|mut val| {
-                            val.as_table_mut().map(|s| {
-                                s.insert("type".to_owned(), c.to_owned().into());
-                                s
-                            });
-                            val
-                        })
-                        .unwrap_or(Value::Table(BTreeMap::new())),
+                    inner: {
+                        let mut d = SinkDescription::example(c)
+                            .map_err(|e| {
+                                match e {
+                                    ExampleError::MissingExample => {}
+                                    _ => errs.push(e.clone()),
+                                }
+                                e
+                            })
+                            .unwrap_or(Value::Table(BTreeMap::new()));
+                        d.as_table_mut().map(|s| {
+                            s.insert("type".to_owned(), c.to_owned().into());
+                            s
+                        });
+                        d
+                    },
                 },
             );
         });
+
+    if errs.len() > 0 {
+        errs.iter().for_each(|e| eprintln!("Generate error: {}", e));
+        return exitcode::SOFTWARE;
+    }
 
     match toml::to_string_pretty(&config) {
         Ok(s) => {
