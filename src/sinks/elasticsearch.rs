@@ -458,6 +458,9 @@ mod integration_tests {
     use futures::{Future, Sink};
     use hyper::{Body, Request};
     use serde_json::{json, Value};
+    use std::fs::File;
+    use std::io::Read;
+    use hyper_native_tls::NativeTlsClient;
 
     #[test]
     fn structures_events_correctly() {
@@ -567,15 +570,18 @@ mod integration_tests {
         // make sure writes all all visible
         block_on(flush(&config)).expect("Flushing writes failed");
 
-        let http_client = reqwest::Client::builder()
-            .add_root_certificate(
-                reqwest::Certificate::from_pem(
-                    &open_read("tests/data/Vector_CA.crt", "certificate").unwrap(),
-                )
-                .expect("Could not parse test CA"),
-            )
-            .build()
-            .expect("Could not build HTTP client");
+        let cert = {
+            let mut cert_file = File::open("tests/data/Vector_CA.crt")?;
+            let mut cert_raw = Vec::new();
+            cert_file.read_to_end(&mut cert_raw)?;
+            Pkcs12::from_der(&cert_raw, "mypassword")?
+        };
+        let tls_conn = TlsConnector::builder()
+            .identity(cert)?
+            .build()?;
+        let ssl = NativeTlsClient::from(tls_conn)?;
+        let https_conn = HttpsConnector::new(ssl);
+        let http_client = hyper::Client::with_connector(https_conn);
         let client = SyncClientBuilder::new()
             .http_client(http_client)
             .static_node(config.host)
